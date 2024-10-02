@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Whiteboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <!-- Include Font Awesome -->
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: Arial, sans-serif;
+        }
+
+        #board {
+            border: 2px solid #000;
+            touch-action: none;
+            width: 90vw;
+            /* Responsive width */
+            height: 70vh;
+            /* Responsive height */
+            display: none;
+            /* Initially hidden */
+        }
+
+        .controls {
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .controls input {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-bottom: 5px;
+            width: 80%;
+            /* Responsive width */
+        }
+
+        .controls button {
+            background-color: #3a6edd;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 80%;
+            /* Responsive width */
+            margin: 5px 0;
+            transition: background-color 0.3s;
+        }
+
+        .controls button:hover {
+            background-color: #2c5bbf;
+        }
+
+        #penSettings,
+        #formatSelection,
+        #notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: white;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            display: none;
+        }
+
+        #notification {
+            display: none;
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background-color: #3a6edd;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #penSettings label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        
+        .options {
+            position: absolute; /* Positioning the options container */
+            left: 10px; /* Align to the left */
+            top: 10px; /* Align from the top */
+            display: none;
+            flex-direction: column; /* Vertical layout */
+            gap: 10px; /* Space between buttons */
+        }
+
+        .options button {
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .options button:hover {
+            background-color: #e0e0e0; /* Hover effect */
+        }
+
+        /* Responsive styles */
+        @media (max-width: 600px) {
+            #board {
+                width: 95vw;
+                height: 60vh;
+            }
+
+            .controls input,
+            .controls button {
+                width: 90%;
+                /* Adjusted width for mobile */
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="controls" class="controls">
+        <input type="text" id="roomInput" placeholder="Enter Room ID" />
+        <button id="joinRoom"><i class="fas fa-sign-in-alt"></i></button>
+    </div>
+
+    <div id="notification">You have joined the room!</div>
+    <div class="options" id="options">
+        <button id="penTool"><i class="fas fa-pencil-alt"></i></button>
+        <button id="clearCanvas"><i class="fas fa-eraser"></i></button>
+        <button id="downloadCanvas"><i class="fas fa-download"></i></button>
+        <button id="newCanvas"><i class="fas fa-plus"></i></button>
+    </div>
+    <div id="formatSelection">
+        <label>Select Format:</label>
+        <button id="downloadPng"><i class="fas fa-file-image"></i> PNG</button>
+        <button id="downloadJpg"><i class="fas fa-file-image"></i> JPG</button>
+    </div>
+
+    <div id="penSettings">
+        <label for="penColor">Color:</label>
+        <input type="color" id="penColor" value="#000000" />
+        <label for="penSize">Size:</label>
+        <input type="range" id="penSize" min="1" max="10" value="2" style="width: 100%;" />
+    </div>
+
+    <canvas id="board"></canvas>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const canvas = document.getElementById('board');
+        const ctx = canvas.getContext('2d');
+        let drawing = false;
+        let roomId = '';
+        let lastX = 0;
+        let lastY = 0;
+
+
+        // Set canvas dimensions to fill the window
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // Initial call to set the canvas size
+
+
+        const penTool = document.getElementById('penTool');
+        const penSettings = document.getElementById('penSettings');
+        let isPenSelected = false;
+        let penColor = '#000000';
+        let penSize = 2;
+
+        // Handle pen tool selection and settings toggle
+        penTool.addEventListener('click', () => {
+            if (!isPenSelected) {
+                isPenSelected = true;
+                penTool.style.backgroundColor = '#ccc'; // Visual feedback for pen selection
+            } else {
+                // Toggle pen settings visibility
+                penSettings.style.display = penSettings.style.display === 'none' ? 'block' : 'none';
+            }
+        });
+
+        // Update pen color and size based on user input
+        document.getElementById('penColor').addEventListener('input', (e) => {
+            penColor = e.target.value;
+        });
+
+        document.getElementById('penSize').addEventListener('input', (e) => {
+            penSize = e.target.value;
+        });
+
+        const clearCanvasButton = document.getElementById('clearCanvas');
+
+        // Handle clear canvas button click
+        clearCanvasButton.addEventListener('click', () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear the local canvas
+        });
+
+        const downloadCanvasButton = document.getElementById('downloadCanvas');
+        const formatSelection = document.getElementById('formatSelection');
+        const downloadPngButton = document.getElementById('downloadPng');
+        const downloadJpgButton = document.getElementById('downloadJpg');
+
+        // Show format selection when download button is clicked
+        downloadCanvasButton.addEventListener('click', () => {
+            formatSelection.style.display = 'block'; // Show the format options
+        });
+
+        // Function to download the canvas in the selected format
+        function downloadCanvas(format) {
+            const link = document.createElement('a');
+            if (format === 'png') {
+                link.href = canvas.toDataURL('image/png');
+                link.download = 'canvas.png';
+            } else if (format === 'jpg') {
+                link.href = canvas.toDataURL('image/jpeg', 0.8); // Quality set to 80% for JPG
+                link.download = 'canvas.jpg';
+            }
+            link.click();
+            formatSelection.style.display = 'none'; // Hide the format options after download
+        }
+
+        // Download as PNG
+        downloadPngButton.addEventListener('click', () => {
+            downloadCanvas('png');
+        });
+
+        // Download as JPG
+        downloadJpgButton.addEventListener('click', () => {
+            downloadCanvas('jpg');
+        });
+
+
+
+
+
+
+
+        // Joining room on button click
+        document.getElementById('joinRoom').addEventListener('click', () => {
+            roomId = document.getElementById('roomInput').value;
+            if (roomId) {
+                socket.emit('joinRoom', roomId);
+
+                // Hide the input controls and show the canvas
+                document.getElementById('controls').style.display = 'none';
+                document.getElementById('board').style.display = 'block';
+                document.getElementById('options').style.display = 'block';
+
+                // Optional: Show a notification
+                const notification = document.getElementById('notification');
+                notification.innerText = 'You have joined the room!';
+                notification.style.display = 'block';
+
+                setTimeout(() => {
+                    notification.style.display = 'none';
+                }, 3000);
+
+            }
+        });
+
+        // Start drawing
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('touchstart', startDrawing);
+
+        // Draw on canvas
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('touchmove', draw);
+
+        // Stop drawing
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('touchend', stopDrawing);
+
+        function startDrawing(e) {
+            drawing = true;
+            const rect = canvas.getBoundingClientRect();
+            lastX = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            lastY = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+        }
+
+        function draw(e) {
+            if (!drawing) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+
+
+
+            ctx.strokeStyle = penColor;
+            ctx.lineWidth = penSize;
+
+
+
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);  // Start from the last point
+            ctx.lineTo(x, y);          // Draw to the current point
+            ctx.stroke();
+
+            canvases[currentCanvasId].paths.push([{ x: lastX, y: lastY }, { x, y }]);
+            // Send the drawing data to others in the same room
+            if (roomId) {
+                socket.emit('drawing', { x, y, lastX, lastY, roomId, penColor, penSize });
+            }
+
+            lastX = x;
+            lastY = y;
+        }
+
+        function stopDrawing() {
+            drawing = false;
+            ctx.beginPath(); // Reset path to avoid connecting lines on next draw
+        }
+
+        // Receive drawing data from others in the room
+        socket.on('drawing', (data) => {
+
+
+            ctx.strokeStyle = data.penColor || '#000000';
+            ctx.lineWidth = data.penSize || 2;
+
+
+
+            ctx.beginPath();
+            ctx.moveTo(data.lastX, data.lastY); // Start from the last point received
+            ctx.lineTo(data.x, data.y);         // Draw to the current point received
+            ctx.stroke();
+        });
+        socket.on('userJoined', (userId) => {
+            const notification = document.getElementById('notification');
+            notification.innerText = `User ${userId} has joined the room!`;
+            notification.style.display = 'block';
+
+            // Hide the notification after 3 seconds
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 3000);
+        });
+
+        let currentCanvasId = 0; // Identifier for current canvas
+        const canvases = {}; // Object to hold different canvases
+
+        // Initialize the first canvas
+        canvases[currentCanvasId] = { paths: [] };
+
+        document.getElementById('newCanvas').addEventListener('click', () => {
+            currentCanvasId++; // Increment canvas ID
+            canvases[currentCanvasId] = { paths: [] }; // Create a new canvas
+
+            // Notify others in the room about the new canvas
+            socket.emit('newCanvas', currentCanvasId);
+
+            // Switch to the new canvas
+            switchCanvas(currentCanvasId);
+        });
+
+        function switchCanvas(canvasId) {
+            // Clear the current canvas content
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Update current paths to the new canvas
+            const currentPaths = canvases[canvasId].paths;
+            redraw(currentPaths);
+        }
+
+        // When a user joins a room, they need to set their initial canvas
+        socket.on('newCanvas', (canvasId) => {
+            if (canvasId > currentCanvasId) {
+                switchCanvas(canvasId); // Switch to the new canvas
+            }
+        });
+
+        function redraw(paths) {
+            ctx.beginPath();
+            paths.forEach(path => {
+                path.forEach((point, index) => {
+                    if (index === 0) {
+                        ctx.moveTo(point.x, point.y);
+                    } else {
+                        ctx.lineTo(point.x, point.y);
+                    }
+                });
+            });
+            ctx.stroke();
+        }
+
+    </script>
+
+
+</body>
+
+</html>
